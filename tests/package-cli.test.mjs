@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,13 +8,16 @@ import readline from "node:readline";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-for (const permission of ["full", "accept-edits"]) test(`independent CLI completes a synthetic turn with ${permission} and no BB installation`, async t => {
+for (const permission of ["full", "accept-edits"]) for (const source of ["env", "flag", "equals"]) test(`independent CLI completes a synthetic turn with ${permission}, native entry via ${source}, and no BB installation`, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-package-smoke-"));
   const entry = process.env.ZCODE_TEST_PACKAGED_CLI || fileURLToPath(new URL("../bin/zcode-acp.mjs", import.meta.url));
   const fixture = fileURLToPath(new URL("./support/fake-native-server.mjs", import.meta.url));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^BB_|^ZCODE_|TOKEN|SECRET|API_KEY|CREDENTIAL/.test(key)));
-  Object.assign(env, { ZCODE_NATIVE_ENTRY: fixture, ZCODE_ACP_STATE_DIR: root, ZCODE_STORAGE_DIR: path.join(root, "account"), ZCODE_DATA_BASE_DIR: root });
-  const child = spawn(process.execPath, [entry, `--permission=${permission}`], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const customFixture = path.join(root, "custom install", "fake-native-server.mjs");
+  fs.mkdirSync(path.dirname(customFixture)); fs.copyFileSync(fixture, customFixture);
+  Object.assign(env, { ZCODE_NATIVE_ENTRY: source === "env" ? customFixture : path.join(root, "missing-entry"), ZCODE_ACP_STATE_DIR: root, ZCODE_STORAGE_DIR: path.join(root, "account"), ZCODE_DATA_BASE_DIR: root });
+  const args = source === "flag" ? ["--native-entry", customFixture] : source === "equals" ? [`--native-entry=${customFixture}`] : [];
+  const child = spawn(process.execPath, [entry, `--permission=${permission}`, ...args], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
   const exited = once(child, "close"), pending = new Map(); let id = 0, stderr = "";
   child.stderr.on("data", data => { stderr += data; }); child.stdin.on("error", () => {});
   readline.createInterface({ input: child.stdout }).on("line", line => {
@@ -37,4 +40,18 @@ for (const permission of ["full", "accept-edits"]) test(`independent CLI complet
   assert.equal(session.modes.currentModeId, permission === "full" ? "yolo" : "edit");
   assert.equal((await request("session/prompt", { sessionId: session.sessionId, prompt: [{ type: "text", text: "synthetic fixture only" }] })).stopReason, "end_turn");
   await request("session/close", { sessionId: session.sessionId });
+});
+
+test("doctor honors the explicit native entry without sending a model prompt", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-doctor-entry-"));
+  assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const entry = process.env.ZCODE_TEST_PACKAGED_CLI || fileURLToPath(new URL("../bin/zcode-acp.mjs", import.meta.url));
+  const fixture = fileURLToPath(new URL("./support/fake-native-server.mjs", import.meta.url));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^BB_|^ZCODE_|TOKEN|SECRET|API_KEY|CREDENTIAL/.test(key)));
+  Object.assign(env, { ZCODE_NATIVE_ENTRY: path.join(root, "missing"), ZCODE_ACP_STATE_DIR: root, ZCODE_STORAGE_DIR: path.join(root, "account"), ZCODE_DATA_BASE_DIR: root });
+  const result = JSON.parse(execFileSync(process.execPath, [entry, "--doctor", "--native-entry", fixture], { cwd: root, env, encoding: "utf8", windowsHide: true, timeout: 20_000 }));
+  assert.equal(result.ok, true);
+  assert.equal(result.modelRequestsSent, 0);
+  assert.equal(result.generationVerified, false);
 });

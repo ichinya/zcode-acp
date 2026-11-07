@@ -7,7 +7,7 @@ export function startQuotaUsage(data: unknown, now?: number, serverDate?: number
 export function getAccountFingerprint(options?: { env?: NodeJS.ProcessEnv }): Promise<string>;
 export function findNativeEntry(options?: { env?: NodeJS.ProcessEnv; platform?: string; home?: string }): string;
 export function getRuntimeInfo(): { version: string; cliPath: string; revision: string };
-export function nativeDoctor(cwd?: string): Promise<Record<string, unknown>>;
+export function nativeDoctor(cwd?: string, options?: { env?: NodeJS.ProcessEnv }): Promise<Record<string, unknown>>;
 export class NativeAcpAgent {
   constructor(options?: Record<string, unknown>);
   handle(method: string, params?: unknown): Promise<unknown>;
