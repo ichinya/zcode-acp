@@ -1,0 +1,26 @@
+{
+  "name": "zcode-acp",
+  "version": "0.2.0",
+  "description": "Standalone ACP adapter and account/quota API for installed ZCode Desktop on Windows and macOS.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/ichinya/zcode-acp.git" },
+  "homepage": "https://github.com/ichinya/zcode-acp#readme",
+  "bugs": { "url": "https://github.com/ichinya/zcode-acp/issues" },
+  "engines": { "node": ">=24" },
+  "bin": { "zcode-acp": "./bin/zcode-acp.mjs" },
+  "exports": {
+    ".": { "types": "./index.d.ts", "import": "./index.mjs" },
+    "./cli": "./bin/zcode-acp.mjs",
+    "./stdio": "./lib/stdio.mjs",
+    "./build-auth": "./scripts/build-native-auth.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": ["bin/", "lib/", "native/", "scripts/", "vendor/", "LICENSES/", "index.mjs", "index.d.ts", "README.md", "NOTICE", "LICENSE"],
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build": "node scripts/build-native-auth.mjs --check",
+    "doctor": "node bin/zcode-acp.mjs --doctor",
+    "prepack": "node scripts/build-native-auth.mjs --check"
+  }
+}

@@ -1,0 +1,8 @@
+The standalone transport, state, account composition and quota code is licensed
+under Apache-2.0; see LICENSE. Extracted from this workspace's ZCode bridge.
+
+lib/coding-plan.mjs and vendor/bb-zcode/coding-plan.ts are adapted from
+dpolishuk/bb-zcode, commit 6d38b9ef14d53bbce25a3cd8f5c99b6e5cc828de,
+Copyright (c) 2026 Dmitry Polishuk, under MIT. The full notice is retained in
+LICENSES/bb-zcode-MIT.txt. scripts/build-native-auth.mjs reproduces the adapted
+dependency-free runtime from the retained reference source.
