@@ -1,26 +1,25 @@
 {
   "name": "zcode-acp",
-  "version": "0.2.0",
-  "description": "Standalone ACP adapter and account/quota API for installed ZCode Desktop on Windows and macOS.",
+  "version": "0.3.2",
+  "description": "Development harness and regression reference for the Rust zcode-acp executable.",
   "type": "module",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "git+https://github.com/ichinya/zcode-acp.git" },
-  "homepage": "https://github.com/ichinya/zcode-acp#readme",
-  "bugs": { "url": "https://github.com/ichinya/zcode-acp/issues" },
-  "engines": { "node": ">=24" },
-  "bin": { "zcode-acp": "./bin/zcode-acp.mjs" },
-  "exports": {
-    ".": { "types": "./index.d.ts", "import": "./index.mjs" },
-    "./cli": "./bin/zcode-acp.mjs",
-    "./stdio": "./lib/stdio.mjs",
-    "./build-auth": "./scripts/build-native-auth.mjs",
-    "./package.json": "./package.json"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ichinya/zcode-acp.git"
   },
-  "files": ["bin/", "lib/", "native/", "scripts/", "vendor/", "LICENSES/", "index.mjs", "index.d.ts", "README.md", "NOTICE", "LICENSE"],
+  "homepage": "https://github.com/ichinya/zcode-acp#readme",
+  "bugs": {
+    "url": "https://github.com/ichinya/zcode-acp/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
-    "build": "node scripts/build-native-auth.mjs --check",
-    "doctor": "node bin/zcode-acp.mjs --doctor",
-    "prepack": "node scripts/build-native-auth.mjs --check"
-  }
+    "build": "cargo build --release --locked",
+    "test": "cargo test --locked && node --test tests/rust-wire.test.mjs",
+    "test:reference": "node --test tests/*.test.mjs",
+    "doctor": "cargo run --release --locked -- --doctor"
+  },
+  "private": true
 }

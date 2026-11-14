@@ -6,3 +6,5 @@ node_modules/
 credentials.json
 remote-link.txt
 .repowise/
+target/
+artifacts/

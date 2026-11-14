@@ -1,18 +1,11 @@
 #!/usr/bin/env node
-// Standalone ACP entry point. No BB dependency. Saved Desktop login is reused.
-import { cliEnvironment } from "../lib/cli-options.mjs";
-const args = process.argv.slice(2);
-if (args.includes("--help")) {
-    process.stdout.write("zcode-acp\n  zcode-acp                              ACP over stdin/stdout\n  zcode-acp --doctor                     account/model check, no generation\n  --native-entry PATH                   bundled resources/glm/zcode.cjs\n  ZCODE_NATIVE_ENTRY                    environment alternative; CLI flag wins\n  --permission=accept-edits|full          permission policy\n  --bb-permission=...                    compatibility alias\n");
-} else if (args.includes("--doctor")) {
-  try {
-    const { nativeDoctor } = await import("../lib/native-doctor.mjs");
-    const result = await nativeDoctor(undefined, { env: cliEnvironment(args) });
-    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-    if (!result.ok) process.exitCode = 1;
-  } catch (error) {
-    const { publicErrorMessage } = await import("../lib/native-client.mjs");
-    process.stdout.write(JSON.stringify({ ok: false, error: publicErrorMessage(error), modelRequestsSent: 0 }) + "\n");
-    process.exitCode = 1;
-  }
-} else await import("../lib/stdio.mjs");
+// Development launcher for the Rust build; the adapter itself is not JavaScript.
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+const binary = process.env.ZCODE_ACP_BIN || fileURLToPath(new URL(`../target/release/zcode-acp${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
+const child = spawn(binary, process.argv.slice(2), {
+  stdio: "inherit", windowsHide: true,
+  env: { ...process.env },
+});
+child.on("error", () => { process.stderr.write("Build zcode-acp with cargo build --release first\n"); process.exitCode = 1; });
+child.on("exit", code => { process.exitCode = code ?? 1; });

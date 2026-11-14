@@ -1,0 +1,90 @@
+name: Rust
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-${{ github.event_name }}-${{ github.event.release.id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            wire: true
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            wire: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            wire: true
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            wire: false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      ZCODE_BUILD_TARGET: ${{ matrix.target }}
+      ZCODE_ACP_BUILD_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.release.tag_name || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Check release tag matches Cargo version
+        if: github.event_name == 'release'
+        run: python scripts/check-release-version.py
+        env:
+          ZCODE_RELEASE_TAG: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+      - run: rustup default stable
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: ACP wire tests (native host architecture)
+        if: matrix.wire
+        run: node --test tests/rust-wire.test.mjs
+        env:
+          ZCODE_ACP_BIN: ${{ github.workspace }}/target/${{ matrix.target }}/release/zcode-acp${{ runner.os == 'Windows' && '.exe' || '' }}
+      - run: python scripts/package-native.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zcode-acp-${{ matrix.target }}
+          path: artifacts/*
+          if-no-files-found: error
+  release:
+    name: Attach binaries to published release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zcode-acp-*
+          path: artifacts
+          merge-multiple: true
+      - name: Upload binaries and checksums (rerun-safe)
+        run: gh release upload "$GH_TAG" artifacts/* --repo "$GH_REPO" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_TAG: ${{ github.event.release.tag_name }}
