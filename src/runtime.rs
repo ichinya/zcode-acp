@@ -7,10 +7,6 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug)]
 pub struct Runtime {
     pub executable: PathBuf,
-    /// The signed app's main binary. macOS Keychain items trust only this one,
-    /// not the Helper that `executable` prefers to avoid Dock icons.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub main_executable: PathBuf,
     pub electron: bool,
     pub source: &'static str,
 }
@@ -36,11 +32,6 @@ impl Runtime {
                 })
             });
             return Self {
-                main_executable: if electron {
-                    main.clone().unwrap_or_else(|| executable.clone())
-                } else {
-                    executable.clone()
-                },
                 executable,
                 electron,
                 source: "override",
@@ -48,7 +39,6 @@ impl Runtime {
         }
         if let Some(executable) = bundled {
             return Self {
-                main_executable: main.unwrap_or_else(|| executable.clone()),
                 executable,
                 electron: true,
                 source: "bundle",
@@ -56,7 +46,6 @@ impl Runtime {
         }
         Self {
             executable: PathBuf::from("node"),
-            main_executable: PathBuf::from("node"),
             electron: false,
             source: "path",
         }

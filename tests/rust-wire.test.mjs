@@ -134,3 +134,17 @@ test("Quota commands do not need Node, start sessions or mix plan sources",()=>{
     assert.equal(JSON.parse(execFileSync(binary,["account-scope"],{env,encoding:"utf8",windowsHide:true})).scope,"signed-out");
   }finally{assert.equal(path.dirname(root),path.resolve(os.tmpdir()));fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test("session/new reports unreadable credentials for plan-only sessions and keeps API providers usable", async t => {
+  for (const mode of ["account-only", "normal"]) {
+    const a = start(t, mode, { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: fileURLToPath(new URL("../package.json", import.meta.url)) });
+    const storage = path.join(a.root, ".zcode", "v2");
+    fs.mkdirSync(storage, { recursive: true });
+    fs.writeFileSync(path.join(storage, "credentials.json"), JSON.stringify({ "oauth:active_provider": "enc:unsupported" }));
+    if (mode === "account-only") {
+      await assert.rejects(open(a), /Invalid or unsupported encrypted ZCode credential/);
+    } else {
+      assert.ok((await open(a)).models.availableModels.length);
+    }
+  }
+});

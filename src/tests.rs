@@ -130,7 +130,7 @@ fn mac_runtime_uses_bundle_executable_and_rejects_traversal() {
     assert!(!crate::runtime::Runtime::for_platform(&entry, &Env::new(), "darwin").electron);
 }
 #[test]
-fn mac_runtime_prefers_dockless_helper_but_keeps_main_for_keychain() {
+fn mac_runtime_prefers_dockless_helper_and_accepts_explicit_overrides() {
     let t = Temp::new();
     let (entry, main) = runtime_bundle(&t, "darwin", "ZCode Test");
     let contents = main.parent().unwrap().parent().unwrap().to_path_buf();
@@ -140,14 +140,12 @@ fn mac_runtime_prefers_dockless_helper_but_keeps_main_for_keychain() {
     let r = crate::runtime::Runtime::for_platform(&entry, &Env::new(), "darwin");
     assert!(r.electron);
     assert_eq!(r.executable, helper);
-    assert_eq!(r.main_executable, main);
     let mut env = Env::new();
     for supplied in [&main, &helper] {
         env.insert("ZCODE_NODE".into(), path_string(supplied));
         let r = crate::runtime::Runtime::for_platform(&entry, &env, "darwin");
         assert!(r.electron);
         assert_eq!(r.source, "override");
-        assert_eq!(r.main_executable, main);
     }
 }
 #[test]

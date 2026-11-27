@@ -177,7 +177,8 @@ pub fn linked(b: &Value, p: &Value) -> bool {
 }
 pub struct Account {
     pub env: Env,
-    login: Option<Login>,
+    pub(crate) login: Option<Login>,
+    pub(crate) login_error: Option<Error>,
     client: reqwest::Client,
     material: Option<Material>,
     scope: String,
@@ -198,6 +199,7 @@ impl Account {
         Ok(Self {
             env,
             login: None,
+            login_error: None,
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(15))
@@ -492,9 +494,6 @@ impl Account {
         Ok(m)
     }
     pub async fn init_coding(&mut self, builtin: &Value) -> Result<()> {
-        if self.login.is_none() {
-            self.login = read_login(&self.env)?;
-        }
         let Some(login) = self.login.as_ref().filter(|l| !l.token.is_empty()) else {
             return Ok(());
         };
@@ -519,9 +518,6 @@ impl Account {
         Ok(())
     }
     pub async fn init_start(&mut self, builtin: &Value) -> Result<()> {
-        if self.login.is_none() {
-            self.login = read_login(&self.env)?;
-        }
         let Some(login) = self.login.as_ref().filter(|l| !l.jwt.is_empty()) else {
             return Ok(());
         };
@@ -601,6 +597,15 @@ impl Account {
             return Ok(None);
         };
         let builtin = read_json(&file)?;
+        self.login_error = None;
+        self.login = match read_login(&self.env) {
+            Ok(login) => login,
+            Err(error) => {
+                self.diagnostics.push(error.message.clone());
+                self.login_error = Some(error);
+                return Ok(None);
+            }
+        };
         if let Err(error) = self.init_coding(&builtin).await {
             self.diagnostics.push(format!(
                 "Coding Plan could not be verified: {}",
