@@ -5,7 +5,7 @@ const write = m => process.stdout.write(JSON.stringify(m) + "\n");
 const held = [];
 const input = readline.createInterface({ input: process.stdin });
 let sessionId, eventSeq = 0, pendingPermission;
-const model = { providerId: "fake", modelId: "offline" };
+const model = { providerId: mode === "account-only" ? "account:zai-start-plan" : "fake", modelId: "offline" };
 let selectedModel = { ...model, options: { reasoningLevel: "high" } }, selectedMode = "build";
 const snapshot = () => ({
   session: { sessionId, mode: selectedMode }, messages: [], runtime: { eventSeq },

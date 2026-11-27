@@ -4,7 +4,13 @@ use crate::common::*;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
-use std::{io::Read, path::Path, sync::mpsc, time::Duration};
+use std::{
+    collections::HashMap,
+    io::Read,
+    path::Path,
+    sync::{Arc, LazyLock, Mutex, mpsc},
+    time::{Duration, Instant},
+};
 
 fn unavailable() -> Error {
     Error::new(
@@ -15,19 +21,12 @@ fn unavailable() -> Error {
 // dialog and blocks the call until someone answers it; headless agents hang.
 const OS_KEY_TIMEOUT: Duration = Duration::from_secs(20);
 fn keychain_prompt_pending() -> Error {
-    Error::new(
-        "Timed out waiting for the OS credential store. macOS is probably asking for Keychain access to \"ZCode Credential Encryption\": on the agent machine click \"Always Allow\" for zcode-acp, then retry. The prompt appears again after each zcode-acp update because the binary changes",
-    )
-}
-fn with_timeout<T: Send + 'static>(
-    f: impl FnOnce() -> T + Send + 'static,
-    limit: Duration,
-) -> Option<T> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(f());
-    });
-    rx.recv_timeout(limit).ok()
+    #[cfg(target_os = "macos")]
+    let message = "Timed out waiting for Keychain. Unlock it and review the zcode-acp access request on this Mac, then retry.";
+    #[cfg(not(target_os = "macos"))]
+    let message =
+        "Timed out waiting for the OS credential store. Unlock it on the agent machine and retry.";
+    Error::new(message)
 }
 fn invalid() -> Error {
     Error::new("Invalid or unsupported encrypted ZCode credential")
@@ -183,7 +182,7 @@ impl<'a> Reader<'a> {
                 .ok_or_else(unavailable)?,
             "os" if configured.is_none() => {
                 if self.os_key.is_none() {
-                    self.os_key = Some(read_os_key(self.file, self.env)?);
+                    self.os_key = Some(read_os_key(self.file, fields[1])?);
                 }
                 self.os_key.unwrap()
             }
@@ -205,106 +204,75 @@ fn decode_os_key(encoded: &str) -> Result<[u8; 32]> {
         .try_into()
         .map_err(|_| unavailable())
 }
-// The Keychain item trusts only the signed ZCode app, so the key is fetched
-// through ZCode's own runtime: no dialog, and it survives zcode-acp updates.
-#[cfg(target_os = "macos")]
-fn keyring_module(resources: &Path, arch: &str) -> Option<std::path::PathBuf> {
-    let package = match arch {
-        "aarch64" => "arm64",
-        "x86_64" => "x64",
-        _ => return None,
-    };
-    Some(resources.join(format!(
-        "app.asar.unpacked/node_modules/@napi-rs/keyring-darwin-{package}/keyring.darwin-{package}.node"
-    )))
+#[derive(Default)]
+enum KeyRead {
+    #[default]
+    Empty,
+    Pending(mpsc::Receiver<Result<[u8; 32]>>, Instant),
+    Ready([u8; 32]),
 }
-#[cfg(target_os = "macos")]
-fn read_key_via_zcode(account: &str, env: &Env) -> Option<String> {
-    let entry = crate::config::find_entry(env).ok()?;
-    let runtime = crate::runtime::Runtime::resolve(&entry, env);
-    if !runtime.electron {
-        return None;
-    }
-    let resources = entry.parent()?.parent()?;
-    let module = keyring_module(resources, std::env::consts::ARCH)?;
-    if !module.is_file() {
-        return None;
-    }
-    const SCRIPT: &str = "const {Entry}=require(process.argv[1]);process.stdout.write(new Entry(process.argv[2],process.argv[3]).getPassword()||'')";
-    let mut command = std::process::Command::new(&runtime.main_executable);
-    command
-        .args(["-e", SCRIPT])
-        .arg(&module)
-        .args(["ZCode Credential Encryption", account])
-        .env_clear()
-        .env("ELECTRON_RUN_AS_NODE", "1")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-    for name in ["HOME", "USER", "LOGNAME", "TMPDIR"] {
-        if let Some(value) = env.get(name) {
-            command.env(name, value);
+
+impl KeyRead {
+    // Calls for the same store share both the outstanding read and its deadline.
+    fn get(
+        &mut self,
+        expected: &str,
+        limit: Duration,
+        read: impl FnOnce() -> Result<[u8; 32]> + Send + 'static,
+    ) -> Result<[u8; 32]> {
+        if let Self::Ready(key) = self
+            && fingerprint(key) == expected
+        {
+            return Ok(*key);
         }
+        if !matches!(self, Self::Pending(..)) {
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(read());
+            });
+            *self = Self::Pending(rx, Instant::now() + limit);
+        }
+        let Self::Pending(rx, deadline) = self else {
+            unreachable!()
+        };
+        let result = match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Err(mpsc::RecvTimeoutError::Timeout) => return Err(keychain_prompt_pending()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(unavailable()),
+            Ok(value) => value,
+        };
+        *self = Self::Empty;
+        let key = result?;
+        if fingerprint(&key) != expected {
+            return Err(unavailable());
+        }
+        *self = Self::Ready(key);
+        Ok(key)
     }
-    command.env("PATH", "/usr/bin:/bin");
-    let mut child = command.spawn().ok()?;
-    let mut stdout = child.stdout.take()?;
-    let output = with_timeout(
-        move || {
-            let mut text = String::new();
-            stdout.by_ref().take(256).read_to_string(&mut text).ok()?;
-            Some(text)
-        },
-        OS_KEY_TIMEOUT,
-    )
-    .flatten();
-    let _ = child.kill();
-    let _ = child.wait();
-    output.map(|text| text.trim().to_string())
 }
+
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
-fn read_os_key(file: &Path, env: &Env) -> Result<[u8; 32]> {
-    static CACHE: std::sync::Mutex<Vec<(String, [u8; 32])>> = std::sync::Mutex::new(Vec::new());
-    let path = path_string(absolute(file)?);
-    let account = hash(&path);
-    if let Some((_, key)) = CACHE
+fn read_os_key(file: &Path, expected: &str) -> Result<[u8; 32]> {
+    type Stores = HashMap<String, Arc<Mutex<KeyRead>>>;
+    static STORES: LazyLock<Mutex<Stores>> = LazyLock::new(Mutex::default);
+    let account = hash(path_string(absolute(file)?));
+    let store = STORES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .find(|(cached, _)| *cached == path)
-    {
-        return Ok(*key);
-    }
-    #[cfg(target_os = "macos")]
-    let via_zcode = read_key_via_zcode(&account, env).and_then(|text| decode_os_key(&text).ok());
-    #[cfg(not(target_os = "macos"))]
-    let via_zcode = {
-        let _ = env;
-        None
-    };
-    let key = match via_zcode {
-        Some(key) => key,
-        None => {
-            let encoded = with_timeout(
-                move || {
-                    keyring::Entry::new("ZCode Credential Encryption", &account)
-                        .and_then(|entry| entry.get_password())
-                },
-                OS_KEY_TIMEOUT,
-            )
-            .ok_or_else(keychain_prompt_pending)?
-            .map_err(|_| unavailable())?;
-            decode_os_key(&encoded)?
-        }
-    };
-    CACHE
+        .entry(account.clone())
+        .or_default()
+        .clone();
+    store
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push((path, key));
-    Ok(key)
+        .get(expected, OS_KEY_TIMEOUT, move || {
+            let encoded = keyring::Entry::new("ZCode Credential Encryption", &account)
+                .and_then(|entry| entry.get_password())
+                .map_err(|_| unavailable())?;
+            decode_os_key(&encoded)
+        })
 }
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
-fn read_os_key(_file: &Path, _env: &Env) -> Result<[u8; 32]> {
+fn read_os_key(_file: &Path, _expected: &str) -> Result<[u8; 32]> {
     Err(unavailable())
 }
 
@@ -334,25 +302,50 @@ mod tests {
         assert!(decode_os_key(&key[..42]).is_err());
         assert!(decode_os_key(&format!("{}+", &key[..42])).is_err());
     }
-    #[cfg(target_os = "macos")]
     #[test]
-    fn keyring_module_follows_cpu_architecture() {
-        let root = Path::new("/R");
-        assert!(keyring_module(root, "aarch64").unwrap().ends_with(
-            "app.asar.unpacked/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node"
-        ));
+    fn blocked_read_is_reused_and_rotated_keys_are_refreshed() {
+        let mut store = KeyRead::Empty;
+        let (release, wait) = mpsc::channel();
+        let old = [3; 32];
+        let expected = fingerprint(&old);
         assert!(
-            keyring_module(root, "x86_64")
-                .unwrap()
-                .ends_with("@napi-rs/keyring-darwin-x64/keyring.darwin-x64.node")
+            store
+                .get(&expected, Duration::from_millis(5), move || {
+                    wait.recv().unwrap();
+                    Ok(old)
+                })
+                .is_err()
         );
-        assert!(keyring_module(root, "riscv64").is_none());
-    }
-    #[test]
-    fn with_timeout_returns_value_or_gives_up_on_a_blocked_call() {
-        assert_eq!(with_timeout(|| 7, Duration::from_secs(5)), Some(7));
-        let slow = || std::thread::sleep(Duration::from_millis(500));
-        assert_eq!(with_timeout(slow, Duration::from_millis(20)), None);
+        assert!(
+            store
+                .get(&expected, OS_KEY_TIMEOUT, || panic!("duplicate read"))
+                .is_err()
+        );
+        release.send(()).unwrap();
+        let limit = Instant::now() + Duration::from_secs(3);
+        loop {
+            if store
+                .get(&expected, OS_KEY_TIMEOUT, || panic!("duplicate read"))
+                .is_ok()
+            {
+                break;
+            }
+            assert!(Instant::now() < limit);
+            std::thread::yield_now();
+        }
+        let new = [4; 32];
+        assert_eq!(
+            store
+                .get(&fingerprint(&new), OS_KEY_TIMEOUT, move || Ok(new))
+                .unwrap(),
+            new
+        );
+        assert_eq!(
+            store
+                .get(&fingerprint(&new), OS_KEY_TIMEOUT, || panic!("cache miss"))
+                .unwrap(),
+            new
+        );
     }
     #[test]
     fn v2_os_and_managed_secrets_are_read_only_and_fail_closed() {

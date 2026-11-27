@@ -211,6 +211,7 @@ pub async fn collect(plan: &str, env: &Env) -> Value {
             .ok_or_else(|| Error::new("Catalog unavailable"))?;
         let builtin = read_json(file)?;
         let mut account = Account::new(env.clone())?;
+        account.login = Some(login);
         if plan == "start" {
             account.init_start(&builtin).await?;
             Ok(start_usage(

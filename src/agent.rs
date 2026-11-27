@@ -262,6 +262,13 @@ impl Agent {
             let snapshot=s.native.request(if persisted{"session/resume"}else{"session/create"},params).await?;
             if snapshot["session"]["sessionId"]!=id{return Err(Error::new("Native server returned a different session identity"));}
             if !snapshot["settings"].is_object(){return Err(Error::new("Invalid native session snapshot"));}
+            if let Some(error) = &s.account.lock().await.login_error {
+                let available = list(&snapshot["settings"]["model"]["available"]);
+                if !available.iter().any(|model| model.get("disabledReason").is_none_or(Value::is_null)
+                    && !text(&model["ref"]["providerId"]).starts_with("account:")) {
+                    return Err(error.clone());
+                }
+            }
             *s.snapshot.lock().await=snapshot;
             let current={let snapshot=s.snapshot.lock().await;if snapshot["settings"]["model"]["current"].is_null(){list(&snapshot["settings"]["model"]["available"]).iter().find(|m|m.get("disabledReason").is_none_or(Value::is_null)).cloned()}else{None}};
             if let Some(model)=current{s.accept(s.native.request("session/setModel",json!({"sessionId":id,"model":models::selection(&model)})).await?).await?;}
