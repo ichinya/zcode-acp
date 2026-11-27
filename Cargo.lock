@@ -2662,7 +2662,7 @@ dependencies = [
 
 [[package]]
 name = "zcode-acp"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

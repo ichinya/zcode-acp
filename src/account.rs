@@ -14,6 +14,23 @@ pub struct Login {
     pub jwt: String,
     pub fingerprint: String,
 }
+// Desktop lets users add model ids to a plan provider (personalModelIds in the
+// personal provider config); the native runtime lists them, so they must be
+// signed with the plan credentials too.
+pub fn personal_model_ids(env: &Env, provider_id: &str) -> Vec<String> {
+    let Some(file) = env.get("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE") else {
+        return vec![];
+    };
+    let Ok(config) = read_json(file) else {
+        return vec![];
+    };
+    list(&config["config"]["providerConfigRules"]["providerRules"])
+        .iter()
+        .filter(|rule| rule["providerId"] == provider_id)
+        .flat_map(|rule| list(&rule["config"]["personalModelIds"]).to_vec())
+        .filter_map(|id| id.as_str().filter(|id| !id.is_empty()).map(str::to_owned))
+        .collect()
+}
 pub fn read_login(env: &Env) -> Result<Option<Login>> {
     let p = storage(env).join("credentials.json");
     let store = if p.exists() {
@@ -680,7 +697,10 @@ impl Account {
         let rejected = p.get("rejectedProjectTokenFingerprint").map(text);
         if provider["providerId"] != p["providerId"]
             || access["mode"] != "individual-coding-plan"
-            || !list(&provider["config"]["builtinModelIds"]).contains(&model["modelId"])
+            || !(list(&provider["config"]["builtinModelIds"]).contains(&model["modelId"])
+                || personal_model_ids(&self.env, text(&provider["providerId"]))
+                    .iter()
+                    .any(|id| id == text(&model["modelId"])))
             || p.get("expectedAccountScope")
                 .is_some_and(|v| text(v) != self.scope)
             || rejected.is_some_and(|r| {

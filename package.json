@@ -1,6 +1,6 @@
 {
   "name": "zcode-acp",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Development harness and regression reference for the Rust zcode-acp executable.",
   "type": "module",
   "license": "Apache-2.0",

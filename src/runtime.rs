@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug)]
 pub struct Runtime {
     pub executable: PathBuf,
+    /// The signed app's main binary. macOS Keychain items trust only this one,
+    /// not the Helper that `executable` prefers to avoid Dock icons.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub main_executable: PathBuf,
     pub electron: bool,
     pub source: &'static str,
 }
@@ -16,19 +20,27 @@ impl Runtime {
     }
 
     pub(crate) fn for_platform(entry: &Path, env: &Env, os: &str) -> Self {
-        let bundled = bundled_executable(entry, os);
+        let main = bundled_executable(entry, os);
+        let bundled = main.as_deref().map(|m| helper_executable(m, os));
         if let Some(explicit) = env.get("ZCODE_NODE").filter(|s| !s.trim().is_empty()) {
             let executable = PathBuf::from(explicit);
-            let electron = bundled.as_ref().is_some_and(|candidate| {
+            let electron = main.as_ref().zip(bundled.as_ref()).is_some_and(|pair| {
                 let supplied = absolute(&executable).map(path_string).unwrap_or_default();
-                let candidate = path_string(candidate);
-                if os == "win32" {
-                    supplied.eq_ignore_ascii_case(&candidate)
-                } else {
-                    supplied == candidate
-                }
+                [pair.0, pair.1].into_iter().any(|candidate| {
+                    let candidate = path_string(candidate);
+                    if os == "win32" {
+                        supplied.eq_ignore_ascii_case(&candidate)
+                    } else {
+                        supplied == candidate
+                    }
+                })
             });
             return Self {
+                main_executable: if electron {
+                    main.clone().unwrap_or_else(|| executable.clone())
+                } else {
+                    executable.clone()
+                },
                 executable,
                 electron,
                 source: "override",
@@ -36,6 +48,7 @@ impl Runtime {
         }
         if let Some(executable) = bundled {
             return Self {
+                main_executable: main.unwrap_or_else(|| executable.clone()),
                 executable,
                 electron: true,
                 source: "bundle",
@@ -43,6 +56,7 @@ impl Runtime {
         }
         Self {
             executable: PathBuf::from("node"),
+            main_executable: PathBuf::from("node"),
             electron: false,
             source: "path",
         }
@@ -61,6 +75,23 @@ impl Runtime {
         json!({"kind":if self.electron {"zcode-electron"} else {"node"},
             "executable":path_string(&self.executable),"source":self.source})
     }
+}
+
+// A Helper app is LSUIElement, so ELECTRON_RUN_AS_NODE children of it get no
+// Dock icon; the main binary would show one per process.
+fn helper_executable(main: &Path, os: &str) -> PathBuf {
+    if os != "darwin" {
+        return main.to_path_buf();
+    }
+    let helper = (|| {
+        let name = main.file_name()?.to_str()?;
+        let contents = main.parent()?.parent()?;
+        let helper = contents
+            .join("Frameworks")
+            .join(format!("{name} Helper.app/Contents/MacOS/{name} Helper"));
+        helper.is_file().then_some(helper)
+    })();
+    helper.unwrap_or_else(|| main.to_path_buf())
 }
 
 fn bundled_executable(entry: &Path, os: &str) -> Option<PathBuf> {
